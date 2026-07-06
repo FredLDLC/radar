@@ -105,11 +105,10 @@
   <div class="hint" style="margin-top:10px">« Marque » = boutique officielle du fabricant (détectée automatiquement). Les autres marchands sont surveillés en arrière-plan : alerte si l'un d'eux est moins cher.</div>
   <div class="actions">
     <button class="btn" id="go">Lancer le relevé</button>
-    <label class="counter" style="display:flex;align-items:center;gap:6px">Source
-      <select id="source" style="font:inherit;padding:4px 6px;border:1px solid var(--line);border-radius:6px">
-        <option value="both" selected>idealo + Google Shopping</option>
-        <option value="idealo">idealo seul (gratuit)</option>
-        <option value="gshop">Google Shopping seul</option>
+    <label class="counter" style="display:flex;align-items:center;gap:6px">Concurrents manquants
+      <select id="complete" style="font:inherit;padding:4px 6px;border:1px solid var(--line);border-radius:6px">
+        <option value="1" selected>relancer une recherche ciblée</option>
+        <option value="0">ne pas insister</option>
       </select>
     </label>
     <label class="counter" style="display:flex;align-items:center;gap:6px">Profondeur
@@ -148,6 +147,8 @@ const MERCHANTS = [
 ];
 const BRAND_ID = 'marque';
 const EXCLUDED_RE = /ldlc|materiel\s?\.?\s?net|top\s?achat|rue\s?du\s?commerce/i;
+// Enseignes prises en compte pour les alertes "moins cher ailleurs" (hors marketplaces exotiques, occasion, clés de jeux)
+const ALERT_WHITELIST = /conforama|(?:^|\s)but(?:\s|\.|$)|carrefour|auchan|leclerc|intermarch|pccomponentes|media\s?markt|ubaldi|villatech|son[\s-]?vid[eé]o|bureau\s?vall|1fodiscount|krefel|electro\s?d[eé]p[oô]t/i;
 
 let refs = [];
 let lastRun = null; // {checked:[ids], rows:[...]}
@@ -232,9 +233,22 @@ goBtn.onclick = async () => {
   prog.classList.add('on');
 
   const depth = parseInt(document.getElementById('depth').value) || 2;
-  const sourceMode = document.getElementById('source').value;
+  const completeMissing = document.getElementById('complete').value === '1';
   const rows = [];
   let requests = 0;
+
+  async function shoppingQuery(q, page) {
+    const resp = await fetch('/api/search', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ q, page: page || 1 })
+    });
+    requests++;
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || ('Erreur HTTP ' + resp.status));
+    return data.shopping || [];
+  }
+
   for (let i = 0; i < refs.length; i++) {
     const ref = refs[i];
     setProgress(i, refs.length, ref);
@@ -242,45 +256,29 @@ goBtn.onclick = async () => {
     let error = null;
     const notes = [];
 
-    // Source idealo (gratuite)
-    if (sourceMode === 'idealo' || sourceMode === 'both') {
+    // 1) Recherche générale (1 à 3 pages)
+    for (let p = 1; p <= depth; p++) {
       try {
-        const resp = await fetch('/api/idealo', {
-          method:'POST',
-          headers:{ 'Content-Type':'application/json' },
-          body: JSON.stringify({ q: ref })
-        });
-        const data = await resp.json();
-        if (resp.ok && data.products) {
-          for (const p of data.products) {
-            if (!p.offers) continue;
-            for (const o of p.offers) {
-              items.push({ source: o.merchant, title: p.title || ref, price: String(o.price), link: o.link });
-            }
-          }
-          if (data.note) notes.push('idealo : ' + data.note);
-          if (!data.products.some(p => p.offers && p.offers.length)) notes.push('idealo : aucune offre extraite');
-        } else if (data.error) notes.push('idealo : ' + data.error);
-      } catch (e) { notes.push('idealo : erreur réseau'); }
+        const batch = await shoppingQuery(ref, p);
+        items = items.concat(batch);
+        if (batch.length < 10) break; // plus de pages disponibles
+        await new Promise(r => setTimeout(r, 250));
+      } catch (e) { error = e.message; break; }
     }
 
-    // Source Google Shopping (Serper)
-    if (sourceMode === 'gshop' || sourceMode === 'both') {
-      for (let p = 1; p <= depth; p++) {
+    // 2) Ciblage : requête dédiée pour chaque concurrent coché sans prix
+    if (completeMissing && !error) {
+      const provisional = analyseRow(ref, items);
+      const missing = checked.filter(id => id !== BRAND_ID && !provisional.best[id]);
+      for (const mid of missing) {
+        const merch = MERCHANTS.find(m => m.id === mid);
         try {
-          const resp = await fetch('/api/search', {
-            method:'POST',
-            headers:{ 'Content-Type':'application/json' },
-            body: JSON.stringify({ q: ref, page: p })
-          });
-          requests++;
-          const data = await resp.json();
-          if (!resp.ok) { error = data.error || ('Erreur HTTP ' + resp.status); break; }
-          const batch = data.shopping || [];
-          items = items.concat(batch);
-          if (batch.length < 10) break; // plus de pages disponibles
+          setProgress(i, refs.length, ref + ' → ciblage ' + merch.label);
+          const batch = await shoppingQuery(ref + ' ' + merch.label, 1);
+          // on ne garde que les offres du marchand ciblé (le reste est déjà couvert)
+          items = items.concat(batch.filter(it => merch.re.test(it.source || '')));
           await new Promise(r => setTimeout(r, 250));
-        } catch (e) { error = 'Erreur réseau : ' + e.message; break; }
+        } catch (e) { notes.push('ciblage ' + merch.label + ' : ' + e.message); }
       }
     }
 
@@ -300,7 +298,7 @@ goBtn.onclick = async () => {
   renderResults();
   goBtn.disabled = false;
   document.getElementById('counter').textContent =
-    requests + ' requête' + (requests > 1 ? 's' : '') + ' Serper (idealo : gratuit).';
+    requests + ' requête' + (requests > 1 ? 's' : '') + ' Serper pour ce relevé.';
   setTimeout(() => prog.classList.remove('on'), 1200);
 };
 
@@ -444,21 +442,27 @@ function renderResults(){
       table.appendChild(trAll);
     }
 
-    // sous-marin : marchands hors sélection moins chers que le min des cochés
+    // sous-marin : enseignes sérieuses hors sélection, moins chères que le min des cochés
+    // filtre de plausibilité : un prix < 50% du min est probablement un autre produit (accessoire, clé, occasion)
     if (min !== null) {
+      const floor = min * 0.5;
       const cheaper = {};
       for (const o of row.others) {
-        if (o.price < min && (!cheaper[o.source] || o.price < cheaper[o.source].price)) cheaper[o.source] = o;
+        if (!ALERT_WHITELIST.test(o.source)) continue;
+        if (o.price >= floor && o.price < min && (!cheaper[o.source] || o.price < cheaper[o.source].price)) cheaper[o.source] = o;
       }
-      if (row.brand && !checked.includes(BRAND_ID) && row.brand.price < min) cheaper[row.brand.source] = row.brand;
+      if (row.brand && !checked.includes(BRAND_ID) && row.brand.price < min && row.brand.price >= floor) cheaper[row.brand.source] = row.brand;
       for (const src in cheaper) {
         const o = cheaper[src];
         alerts.push({ ref: row.ref, source: src, price: o.price, link: o.link });
       }
     } else if (row.others.length) {
-      // rien trouvé chez les cochés : signaler le moins cher ailleurs
-      const cheapest = row.others.reduce((a,b) => a.price < b.price ? a : b);
-      alerts.push({ ref: row.ref, source: cheapest.source, price: cheapest.price, link: cheapest.link, note: 'aucun prix chez les concurrents cochés' });
+      // rien trouvé chez les cochés : signaler le moins cher parmi les enseignes sérieuses
+      const serious = row.others.filter(o => ALERT_WHITELIST.test(o.source));
+      if (serious.length) {
+        const cheapest = serious.reduce((a,b) => a.price < b.price ? a : b);
+        alerts.push({ ref: row.ref, source: cheapest.source, price: cheapest.price, link: cheapest.link, note: 'aucun prix chez les concurrents cochés' });
+      }
     }
   }
 
