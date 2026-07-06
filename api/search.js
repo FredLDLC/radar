@@ -16,12 +16,13 @@ module.exports = async (req, res) => {
 
   const q = req.body && req.body.q ? String(req.body.q).trim() : '';
   if (!q) return res.status(400).json({ error: 'Paramètre q manquant' });
+  const page = Math.min(Math.max(parseInt(req.body.page) || 1, 1), 5);
 
   try {
     const r = await fetch('https://google.serper.dev/shopping', {
       method: 'POST',
       headers: { 'X-API-KEY': key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q, gl: 'fr', hl: 'fr', num: 40 })
+      body: JSON.stringify({ q, gl: 'fr', hl: 'fr', num: 40, page })
     });
     const data = await r.json();
     return res.status(r.status).json(data);
