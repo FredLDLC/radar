@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RADAR — Relevés de prix concurrents</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#F4F6F8; --card:#FFFFFF; --ink:#171B21; --muted:#5B6570;
+    --line:#E1E6EB; --accent:#0E9F6E; --accent-soft:#E6F6F0;
+    --alert:#B45309; --alert-soft:#FEF3E2; --error:#B91C1C; --error-soft:#FEE9E9;
+    --link:#1D4ED8; --radius:10px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background:var(--paper); color:var(--ink);
+    font-family:'IBM Plex Sans',system-ui,sans-serif; font-size:15px;
+    padding:28px 20px 80px; max-width:1180px; margin:0 auto;
+  }
+  h1{font-family:'Space Grotesk',sans-serif; font-size:26px; letter-spacing:.5px;}
+  h1 .dot{color:var(--accent);}
+  .sub{color:var(--muted); margin-top:2px; font-size:13.5px;}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:18px; margin-top:18px;}
+  .card h2{font-family:'Space Grotesk',sans-serif; font-size:15px; margin-bottom:10px; text-transform:uppercase; letter-spacing:.8px; color:var(--muted);}
+  textarea{
+    width:100%; min-height:96px; border:1px solid var(--line); border-radius:8px;
+    padding:10px 12px; font:inherit; resize:vertical; background:#FBFCFD;
+  }
+  textarea:focus{outline:2px solid var(--accent); border-color:transparent;}
+  .hint{font-size:12.5px; color:var(--muted); margin-top:6px;}
+  .chips{display:flex; flex-wrap:wrap; gap:8px; margin-top:12px;}
+  .chip{
+    display:inline-flex; align-items:center; gap:7px; background:var(--accent-soft);
+    border:1px solid #BFE8D8; color:#0B7A55; border-radius:999px; padding:4px 6px 4px 12px;
+    font-size:13.5px; font-weight:500;
+  }
+  .chip button{border:0; background:#0B7A5522; color:#0B7A55; width:18px; height:18px; border-radius:50%; cursor:pointer; font-size:12px; line-height:1;}
+  .comp-grid{display:flex; flex-wrap:wrap; gap:10px;}
+  .comp{
+    display:flex; align-items:center; gap:8px; border:1px solid var(--line);
+    border-radius:8px; padding:9px 14px; cursor:pointer; user-select:none; background:#FBFCFD;
+    font-weight:500; font-size:14px;
+  }
+  .comp:has(input:checked){border-color:var(--accent); background:var(--accent-soft);}
+  .comp input{accent-color:var(--accent); width:16px; height:16px; cursor:pointer;}
+  .actions{display:flex; align-items:center; gap:14px; margin-top:18px; flex-wrap:wrap;}
+  .btn{
+    font-family:'Space Grotesk',sans-serif; font-size:15px; font-weight:700; letter-spacing:.4px;
+    background:var(--ink); color:#fff; border:0; border-radius:8px; padding:12px 26px; cursor:pointer;
+  }
+  .btn:hover{background:#000;}
+  .btn:disabled{background:#9AA3AC; cursor:not-allowed;}
+  .btn.secondary{background:transparent; color:var(--ink); border:1px solid var(--line); font-weight:500;}
+  .btn.secondary:hover{background:#EEF1F4;}
+  .counter{font-size:12.5px; color:var(--muted);}
+  .progress{display:none; margin-top:16px;}
+  .progress.on{display:block;}
+  .progress .txt{font-size:13.5px; color:var(--muted); margin-bottom:6px;}
+  .bar{height:6px; background:var(--line); border-radius:999px; overflow:hidden;}
+  .bar i{display:block; height:100%; width:0%; background:var(--accent); transition:width .3s;}
+  table{width:100%; border-collapse:collapse; margin-top:6px;}
+  th,td{border-bottom:1px solid var(--line); padding:10px 12px; text-align:left; vertical-align:top;}
+  th{font-size:12px; text-transform:uppercase; letter-spacing:.7px; color:var(--muted); font-weight:600; white-space:nowrap;}
+  td.ref{font-weight:600; max-width:230px;}
+  td.ref .pname{display:block; font-weight:400; font-size:12.5px; color:var(--muted); margin-top:3px;}
+  td .price{
+    font-variant-numeric:tabular-nums; font-weight:600; color:var(--link);
+    text-decoration:none; white-space:nowrap;
+  }
+  td .price:hover{text-decoration:underline;}
+  td.best{background:var(--accent-soft);}
+  td.best .price{color:#0B7A55;}
+  td .nf{color:#B6BEC6;}
+  .alerts{margin-top:14px; display:flex; flex-direction:column; gap:8px;}
+  .alert-line{
+    background:var(--alert-soft); border:1px solid #F3D9AE; color:var(--alert);
+    border-radius:8px; padding:9px 14px; font-size:13.5px;
+  }
+  .alert-line a{color:var(--alert); font-weight:600;}
+  .err-line{background:var(--error-soft); border:1px solid #F1BCBC; color:var(--error); border-radius:8px; padding:9px 14px; font-size:13.5px; margin-top:14px;}
+  .legend{font-size:12.5px; color:var(--muted); margin-top:10px;}
+  .legend .sw{display:inline-block; width:11px; height:11px; background:var(--accent-soft); border:1px solid #BFE8D8; border-radius:3px; vertical-align:-1px; margin-right:4px;}
+  #results-card{display:none;}
+  .tablewrap{overflow-x:auto;}
+  @media (max-width:640px){ body{padding:16px 10px 60px;} .card{padding:14px;} }
+</style>
+</head>
+<body>
+
+<h1>RADAR<span class="dot">.</span></h1>
+<div class="sub">Relevés de prix concurrents — Google Shopping France · sites Groupe LDLC exclus</div>
+
+<div class="card">
+  <h2>1 · Produits à relever</h2>
+  <textarea id="refs-input" placeholder="Colle ici tes EAN, SKU ou noms de produits — un par ligne (copier/coller depuis Excel ou Outlook accepté)"></textarea>
+  <div class="hint">Un identifiant par ligne. Les cellules Excel collées sont découpées automatiquement.</div>
+  <div class="chips" id="chips"></div>
+</div>
+
+<div class="card">
+  <h2>2 · Concurrents à relever</h2>
+  <div class="comp-grid" id="comp-grid"></div>
+  <div class="hint" style="margin-top:10px">« Marque » = boutique officielle du fabricant (détectée automatiquement). Les autres marchands sont surveillés en arrière-plan : alerte si l'un d'eux est moins cher.</div>
+  <div class="actions">
+    <button class="btn" id="go">Lancer le relevé</button>
+    <button class="btn secondary" id="copy" style="display:none">Copier pour Excel</button>
+    <span class="counter" id="counter"></span>
+  </div>
+  <div class="progress" id="progress">
+    <div class="txt" id="progress-txt"></div>
+    <div class="bar"><i id="progress-bar"></i></div>
+  </div>
+  <div id="global-err"></div>
+</div>
+
+<div class="card" id="results-card">
+  <h2 id="results-title">3 · Résultats</h2>
+  <div class="tablewrap"><table id="results"></table></div>
+  <div class="legend"><span class="sw"></span> prix le plus bas de la ligne · clic sur un prix = fiche produit du marchand</div>
+  <div class="alerts" id="alerts"></div>
+</div>
+
+<script>
+const MERCHANTS = [
+  { id:'amazon',    label:'Amazon.fr', re:/amazon/i },
+  { id:'cdiscount', label:'Cdiscount', re:/cdiscount/i },
+  { id:'fnac',      label:'FNAC',      re:/fnac/i },
+  { id:'boulanger', label:'Boulanger', re:/boulanger/i },
+  { id:'darty',     label:'Darty',     re:/darty/i },
+  { id:'cybertek',  label:'Cybertek',  re:/cybertek/i },
+  { id:'grosbill',  label:'Grosbill',  re:/gros\s?bill/i },
+];
+const BRAND_ID = 'marque';
+const EXCLUDED_RE = /ldlc|materiel\s?\.?\s?net|top\s?achat|rue\s?du\s?commerce/i;
+
+let refs = [];
+let lastRun = null; // {checked:[ids], rows:[...]}
+
+// ---------- Saisie des refs ----------
+const input = document.getElementById('refs-input');
+input.addEventListener('input', () => {
+  const raw = input.value.split(/[\n\r\t]+/).map(s => s.trim()).filter(Boolean);
+  refs = [...new Set(raw)];
+  renderChips();
+});
+function renderChips(){
+  const box = document.getElementById('chips');
+  box.innerHTML = '';
+  refs.forEach((r, i) => {
+    const c = document.createElement('span');
+    c.className = 'chip';
+    c.append(document.createTextNode(r));
+    const b = document.createElement('button');
+    b.textContent = '✕';
+    b.title = 'Retirer';
+    b.onclick = () => { refs.splice(i,1); syncTextarea(); renderChips(); };
+    c.appendChild(b);
+    box.appendChild(c);
+  });
+}
+function syncTextarea(){ input.value = refs.join('\n'); }
+
+// ---------- Cases concurrents ----------
+const grid = document.getElementById('comp-grid');
+const saved = JSON.parse(localStorage.getItem('radar_checked') || 'null');
+[...MERCHANTS, { id:BRAND_ID, label:'Marque (boutique officielle)' }].forEach(m => {
+  const lab = document.createElement('label');
+  lab.className = 'comp';
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.value = m.id;
+  cb.checked = saved ? saved.includes(m.id) : true;
+  cb.onchange = saveChecked;
+  lab.append(cb, document.createTextNode(m.label));
+  grid.appendChild(lab);
+});
+function checkedIds(){ return [...grid.querySelectorAll('input:checked')].map(i => i.value); }
+function saveChecked(){ localStorage.setItem('radar_checked', JSON.stringify(checkedIds())); }
+
+// ---------- Utilitaires ----------
+function parsePrice(str){
+  if (!str) return null;
+  let s = String(str).replace(/[^\d.,]/g, '');
+  if (!s) return null;
+  // format FR "1 234,56" ou "124,95" ; format "124.95" possible
+  if (s.includes(',') && s.includes('.')) s = s.replace(/\./g, '').replace(',', '.');
+  else if (s.includes(',')) s = s.replace(',', '.');
+  const v = parseFloat(s);
+  return isNaN(v) ? null : v;
+}
+function fmtPrice(v){
+  return v.toLocaleString('fr-FR', { minimumFractionDigits:2, maximumFractionDigits:2 }) + ' €';
+}
+function matchMerchant(source){
+  for (const m of MERCHANTS) if (m.re.test(source)) return m.id;
+  return null;
+}
+function isBrandStore(source, title){
+  // Boutique de marque : chaque mot significatif du nom du marchand figure dans le titre produit
+  const words = source.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2);
+  if (!words.length) return false;
+  const t = title.toLowerCase();
+  return words.every(w => t.includes(w));
+}
+
+// ---------- Relevé ----------
+const goBtn = document.getElementById('go');
+goBtn.onclick = async () => {
+  if (!refs.length) { showGlobalErr('Aucun produit saisi.'); return; }
+  const checked = checkedIds();
+  if (!checked.length) { showGlobalErr('Coche au moins un concurrent.'); return; }
+  showGlobalErr('');
+  goBtn.disabled = true;
+  document.getElementById('copy').style.display = 'none';
+  const prog = document.getElementById('progress');
+  prog.classList.add('on');
+
+  const rows = [];
+  for (let i = 0; i < refs.length; i++) {
+    const ref = refs[i];
+    setProgress(i, refs.length, ref);
+    try {
+      const resp = await fetch('/api/search', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({ q: ref })
+      });
+      const data = await resp.json();
+      if (!resp.ok) { rows.push({ ref, error: data.error || ('Erreur HTTP ' + resp.status) }); continue; }
+      rows.push(analyseRow(ref, data.shopping || []));
+    } catch (e) {
+      rows.push({ ref, error: 'Erreur réseau : ' + e.message });
+    }
+    if (i < refs.length - 1) await new Promise(r => setTimeout(r, 350));
+  }
+  setProgress(refs.length, refs.length, 'terminé');
+  lastRun = { checked, rows, date: new Date() };
+  renderResults();
+  goBtn.disabled = false;
+  document.getElementById('counter').textContent =
+    refs.length + ' requête' + (refs.length > 1 ? 's' : '') + ' Serper utilisée' + (refs.length > 1 ? 's' : '') + ' pour ce relevé.';
+  setTimeout(() => prog.classList.remove('on'), 1200);
+};
+
+function analyseRow(ref, items){
+  const best = {};      // merchantId -> {price, link}
+  let brand = null;     // {source, price, link}
+  const others = [];    // hors liste, hors LDLC
+  let productName = '';
+
+  for (const it of items) {
+    const source = it.source || '';
+    const title = it.title || '';
+    const price = parsePrice(it.price);
+    const link = it.link || '';
+    if (!price || !source) continue;
+    if (EXCLUDED_RE.test(source) || EXCLUDED_RE.test(link)) continue;
+    if (!productName && title) productName = title;
+
+    const mid = matchMerchant(source);
+    if (mid) {
+      if (!best[mid] || price < best[mid].price) best[mid] = { price, link };
+    } else if (isBrandStore(source, title)) {
+      if (!brand || price < brand.price) brand = { source, price, link };
+    } else {
+      others.push({ source, price, link });
+    }
+  }
+  return { ref, productName, best, brand, others };
+}
+
+function renderResults(){
+  const { checked, rows } = lastRun;
+  const card = document.getElementById('results-card');
+  card.style.display = 'block';
+  document.getElementById('results-title').textContent =
+    '3 · Résultats — relevé du ' + lastRun.date.toLocaleString('fr-FR', { dateStyle:'short', timeStyle:'short' });
+
+  const cols = checked.map(id => id === BRAND_ID
+    ? { id, label:'Marque' }
+    : MERCHANTS.find(m => m.id === id));
+
+  const table = document.getElementById('results');
+  table.innerHTML = '';
+  const thead = document.createElement('tr');
+  thead.innerHTML = '<th>Produit</th>' + cols.map(c => '<th>' + c.label + '</th>').join('');
+  table.appendChild(thead);
+
+  const alerts = [];
+
+  for (const row of rows) {
+    const tr = document.createElement('tr');
+    const tdRef = document.createElement('td');
+    tdRef.className = 'ref';
+    tdRef.textContent = row.ref;
+    if (row.productName) {
+      const s = document.createElement('span');
+      s.className = 'pname';
+      s.textContent = row.productName;
+      tdRef.appendChild(s);
+    }
+    tr.appendChild(tdRef);
+
+    if (row.error) {
+      const td = document.createElement('td');
+      td.colSpan = cols.length;
+      td.innerHTML = '<span style="color:var(--error)">' + escapeHtml(row.error) + '</span>';
+      tr.appendChild(td);
+      table.appendChild(tr);
+      continue;
+    }
+
+    // prix par colonne cochée
+    const cellData = cols.map(c => {
+      if (c.id === BRAND_ID) return row.brand ? { price: row.brand.price, link: row.brand.link, extra: row.brand.source } : null;
+      return row.best[c.id] || null;
+    });
+    const found = cellData.filter(Boolean).map(d => d.price);
+    const min = found.length ? Math.min(...found) : null;
+
+    cellData.forEach(d => {
+      const td = document.createElement('td');
+      if (d) {
+        if (min !== null && d.price === min) td.className = 'best';
+        const a = document.createElement('a');
+        a.className = 'price';
+        a.href = d.link;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.textContent = fmtPrice(d.price);
+        td.appendChild(a);
+        if (d.extra) {
+          const s = document.createElement('div');
+          s.style.cssText = 'font-size:11.5px;color:var(--muted);margin-top:2px';
+          s.textContent = d.extra;
+          td.appendChild(s);
+        }
+      } else {
+        td.innerHTML = '<span class="nf">—</span>';
+      }
+      tr.appendChild(td);
+    });
+    table.appendChild(tr);
+
+    // sous-marin : marchands hors sélection moins chers que le min des cochés
+    if (min !== null) {
+      const cheaper = {};
+      for (const o of row.others) {
+        if (o.price < min && (!cheaper[o.source] || o.price < cheaper[o.source].price)) cheaper[o.source] = o;
+      }
+      if (row.brand && !checked.includes(BRAND_ID) && row.brand.price < min) cheaper[row.brand.source] = row.brand;
+      for (const src in cheaper) {
+        const o = cheaper[src];
+        alerts.push({ ref: row.ref, source: src, price: o.price, link: o.link });
+      }
+    } else if (row.others.length) {
+      // rien trouvé chez les cochés : signaler le moins cher ailleurs
+      const cheapest = row.others.reduce((a,b) => a.price < b.price ? a : b);
+      alerts.push({ ref: row.ref, source: cheapest.source, price: cheapest.price, link: cheapest.link, note: 'aucun prix chez les concurrents cochés' });
+    }
+  }
+
+  const alertsBox = document.getElementById('alerts');
+  alertsBox.innerHTML = '';
+  for (const a of alerts) {
+    const d = document.createElement('div');
+    d.className = 'alert-line';
+    d.innerHTML = '⚠ <strong>' + escapeHtml(a.ref) + '</strong> — ' + escapeHtml(a.source) +
+      ' affiche <a href="' + escapeAttr(a.link) + '" target="_blank" rel="noopener">' + fmtPrice(a.price) + '</a>' +
+      (a.note ? ' <em>(' + a.note + ')</em>' : ' (moins cher que ta sélection)');
+    alertsBox.appendChild(d);
+  }
+
+  document.getElementById('copy').style.display = 'inline-block';
+  card.scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+// ---------- Copier pour Excel (TSV) ----------
+document.getElementById('copy').onclick = () => {
+  if (!lastRun) return;
+  const cols = lastRun.checked.map(id => id === BRAND_ID ? 'Marque' : MERCHANTS.find(m => m.id === id).label);
+  const lines = ['Produit\t' + cols.join('\t')];
+  for (const row of lastRun.rows) {
+    if (row.error) { lines.push(row.ref + '\tERREUR'); continue; }
+    const cells = lastRun.checked.map(id => {
+      const d = id === BRAND_ID ? row.brand : row.best[id];
+      return d ? String(d.price).replace('.', ',') : '';
+    });
+    lines.push(row.ref + '\t' + cells.join('\t'));
+  }
+  navigator.clipboard.writeText(lines.join('\n')).then(() => {
+    const b = document.getElementById('copy');
+    b.textContent = 'Copié ✓';
+    setTimeout(() => b.textContent = 'Copier pour Excel', 1600);
+  });
+};
+
+// ---------- Divers ----------
+function setProgress(done, total, label){
+  document.getElementById('progress-txt').textContent = 'Relevé ' + Math.min(done+1, total) + '/' + total + ' — ' + label;
+  document.getElementById('progress-bar').style.width = Math.round(done / total * 100) + '%';
+}
+function showGlobalErr(msg){
+  document.getElementById('global-err').innerHTML = msg ? '<div class="err-line">' + escapeHtml(msg) + '</div>' : '';
+}
+function escapeHtml(s){ const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function escapeAttr(s){ return String(s).replace(/"/g, '&quot;'); }
+</script>
+</body>
+</html>
