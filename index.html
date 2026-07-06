@@ -105,6 +105,20 @@
   <div class="hint" style="margin-top:10px">« Marque » = boutique officielle du fabricant (détectée automatiquement). Les autres marchands sont surveillés en arrière-plan : alerte si l'un d'eux est moins cher.</div>
   <div class="actions">
     <button class="btn" id="go">Lancer le relevé</button>
+    <label class="counter" style="display:flex;align-items:center;gap:6px">Source
+      <select id="source" style="font:inherit;padding:4px 6px;border:1px solid var(--line);border-radius:6px">
+        <option value="both" selected>idealo + Google Shopping</option>
+        <option value="idealo">idealo seul (gratuit)</option>
+        <option value="gshop">Google Shopping seul</option>
+      </select>
+    </label>
+    <label class="counter" style="display:flex;align-items:center;gap:6px">Profondeur
+      <select id="depth" style="font:inherit;padding:4px 6px;border:1px solid var(--line);border-radius:6px">
+        <option value="1">rapide (1 page)</option>
+        <option value="2" selected>standard (2 pages)</option>
+        <option value="3">maxi (3 pages)</option>
+      </select>
+    </label>
     <button class="btn secondary" id="copy" style="display:none">Copier pour Excel</button>
     <span class="counter" id="counter"></span>
   </div>
@@ -199,7 +213,7 @@ function matchMerchant(source){
 }
 function isBrandStore(source, title){
   // Boutique de marque : chaque mot significatif du nom du marchand figure dans le titre produit
-  const words = source.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2);
+  const words = source.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 2);
   if (!words.length) return false;
   const t = title.toLowerCase();
   return words.every(w => t.includes(w));
@@ -217,21 +231,67 @@ goBtn.onclick = async () => {
   const prog = document.getElementById('progress');
   prog.classList.add('on');
 
+  const depth = parseInt(document.getElementById('depth').value) || 2;
+  const sourceMode = document.getElementById('source').value;
   const rows = [];
+  let requests = 0;
   for (let i = 0; i < refs.length; i++) {
     const ref = refs[i];
     setProgress(i, refs.length, ref);
-    try {
-      const resp = await fetch('/api/search', {
-        method:'POST',
-        headers:{ 'Content-Type':'application/json' },
-        body: JSON.stringify({ q: ref })
-      });
-      const data = await resp.json();
-      if (!resp.ok) { rows.push({ ref, error: data.error || ('Erreur HTTP ' + resp.status) }); continue; }
-      rows.push(analyseRow(ref, data.shopping || []));
-    } catch (e) {
-      rows.push({ ref, error: 'Erreur réseau : ' + e.message });
+    let items = [];
+    let error = null;
+    const notes = [];
+
+    // Source idealo (gratuite)
+    if (sourceMode === 'idealo' || sourceMode === 'both') {
+      try {
+        const resp = await fetch('/api/idealo', {
+          method:'POST',
+          headers:{ 'Content-Type':'application/json' },
+          body: JSON.stringify({ q: ref })
+        });
+        const data = await resp.json();
+        if (resp.ok && data.products) {
+          for (const p of data.products) {
+            if (!p.offers) continue;
+            for (const o of p.offers) {
+              items.push({ source: o.merchant, title: p.title || ref, price: String(o.price), link: o.link });
+            }
+          }
+          if (data.note) notes.push('idealo : ' + data.note);
+          if (!data.products.some(p => p.offers && p.offers.length)) notes.push('idealo : aucune offre extraite');
+        } else if (data.error) notes.push('idealo : ' + data.error);
+      } catch (e) { notes.push('idealo : erreur réseau'); }
+    }
+
+    // Source Google Shopping (Serper)
+    if (sourceMode === 'gshop' || sourceMode === 'both') {
+      for (let p = 1; p <= depth; p++) {
+        try {
+          const resp = await fetch('/api/search', {
+            method:'POST',
+            headers:{ 'Content-Type':'application/json' },
+            body: JSON.stringify({ q: ref, page: p })
+          });
+          requests++;
+          const data = await resp.json();
+          if (!resp.ok) { error = data.error || ('Erreur HTTP ' + resp.status); break; }
+          const batch = data.shopping || [];
+          items = items.concat(batch);
+          if (batch.length < 10) break; // plus de pages disponibles
+          await new Promise(r => setTimeout(r, 250));
+        } catch (e) { error = 'Erreur réseau : ' + e.message; break; }
+      }
+    }
+
+    if (error && !items.length) { rows.push({ ref, error }); }
+    else {
+      // déduplication par lien
+      const seen = new Set();
+      items = items.filter(it => { const k = it.link || (it.source + it.title + it.price); if (seen.has(k)) return false; seen.add(k); return true; });
+      const row = analyseRow(ref, items);
+      if (notes.length) row.notes = notes;
+      rows.push(row);
     }
     if (i < refs.length - 1) await new Promise(r => setTimeout(r, 350));
   }
@@ -240,14 +300,15 @@ goBtn.onclick = async () => {
   renderResults();
   goBtn.disabled = false;
   document.getElementById('counter').textContent =
-    refs.length + ' requête' + (refs.length > 1 ? 's' : '') + ' Serper utilisée' + (refs.length > 1 ? 's' : '') + ' pour ce relevé.';
+    requests + ' requête' + (requests > 1 ? 's' : '') + ' Serper (idealo : gratuit).';
   setTimeout(() => prog.classList.remove('on'), 1200);
 };
 
 function analyseRow(ref, items){
-  const best = {};      // merchantId -> {price, link}
-  let brand = null;     // {source, price, link}
+  const best = {};      // merchantId -> {price, link, title}
+  let brand = null;     // {source, price, link, title}
   const others = [];    // hors liste, hors LDLC
+  const all = [];       // tous les résultats retenus (transparence)
   let productName = '';
 
   for (const it of items) {
@@ -258,17 +319,19 @@ function analyseRow(ref, items){
     if (!price || !source) continue;
     if (EXCLUDED_RE.test(source) || EXCLUDED_RE.test(link)) continue;
     if (!productName && title) productName = title;
+    all.push({ source, title, price, link });
 
     const mid = matchMerchant(source);
     if (mid) {
-      if (!best[mid] || price < best[mid].price) best[mid] = { price, link };
+      if (!best[mid] || price < best[mid].price) best[mid] = { price, link, title };
     } else if (isBrandStore(source, title)) {
-      if (!brand || price < brand.price) brand = { source, price, link };
+      if (!brand || price < brand.price) brand = { source, price, link, title };
     } else {
       others.push({ source, price, link });
     }
   }
-  return { ref, productName, best, brand, others };
+  all.sort((a,b) => a.price - b.price);
+  return { ref, productName, best, brand, others, all };
 }
 
 function renderResults(){
@@ -301,6 +364,13 @@ function renderResults(){
       s.textContent = row.productName;
       tdRef.appendChild(s);
     }
+    if (row.notes && row.notes.length) {
+      const n = document.createElement('span');
+      n.className = 'pname';
+      n.style.color = 'var(--alert)';
+      n.textContent = row.notes.join(' · ');
+      tdRef.appendChild(n);
+    }
     tr.appendChild(tdRef);
 
     if (row.error) {
@@ -314,7 +384,7 @@ function renderResults(){
 
     // prix par colonne cochée
     const cellData = cols.map(c => {
-      if (c.id === BRAND_ID) return row.brand ? { price: row.brand.price, link: row.brand.link, extra: row.brand.source } : null;
+      if (c.id === BRAND_ID) return row.brand ? { price: row.brand.price, link: row.brand.link, title: row.brand.title, extra: row.brand.source } : null;
       return row.best[c.id] || null;
     });
     const found = cellData.filter(Boolean).map(d => d.price);
@@ -331,10 +401,15 @@ function renderResults(){
         a.rel = 'noopener';
         a.textContent = fmtPrice(d.price);
         td.appendChild(a);
-        if (d.extra) {
+        const sub = [];
+        if (d.extra) sub.push(d.extra);
+        if (d.title && d.title !== row.productName) sub.push(d.title);
+        else if (d.title && cellData.filter(Boolean).length > 1) sub.push(d.title);
+        if (sub.length) {
           const s = document.createElement('div');
-          s.style.cssText = 'font-size:11.5px;color:var(--muted);margin-top:2px';
-          s.textContent = d.extra;
+          s.style.cssText = 'font-size:11.5px;color:var(--muted);margin-top:2px;max-width:180px;';
+          s.textContent = sub.join(' · ');
+          s.title = sub.join(' · ');
           td.appendChild(s);
         }
       } else {
@@ -343,6 +418,31 @@ function renderResults(){
       tr.appendChild(td);
     });
     table.appendChild(tr);
+
+    // ligne repliable : tous les résultats retenus pour ce produit
+    if (row.all && row.all.length) {
+      const trAll = document.createElement('tr');
+      const tdAll = document.createElement('td');
+      tdAll.colSpan = cols.length + 1;
+      tdAll.style.cssText = 'padding:4px 12px 10px;';
+      const det = document.createElement('details');
+      const sum = document.createElement('summary');
+      sum.style.cssText = 'cursor:pointer;font-size:12.5px;color:var(--muted);';
+      sum.textContent = 'Voir les ' + row.all.length + ' offres trouvées (toutes variantes, tous marchands)';
+      det.appendChild(sum);
+      const ul = document.createElement('div');
+      ul.style.cssText = 'margin-top:8px;display:flex;flex-direction:column;gap:4px;font-size:13px;';
+      row.all.forEach(o => {
+        const l = document.createElement('div');
+        l.innerHTML = '<a class="price" href="' + escapeAttr(o.link) + '" target="_blank" rel="noopener">' + fmtPrice(o.price) + '</a>' +
+          ' — <strong>' + escapeHtml(o.source) + '</strong> · <span style="color:var(--muted)">' + escapeHtml(o.title) + '</span>';
+        ul.appendChild(l);
+      });
+      det.appendChild(ul);
+      tdAll.appendChild(det);
+      trAll.appendChild(tdAll);
+      table.appendChild(trAll);
+    }
 
     // sous-marin : marchands hors sélection moins chers que le min des cochés
     if (min !== null) {
